@@ -1,0 +1,315 @@
+// ═══════════════════════════════════════════════════════════════════
+//  SimpleStock — schema.prisma
+//  Stack: Node.js + Express + Prisma ORM + MySQL 8+
+//  Team 2 · 9 · 10
+//
+//  NOTA: questo schema è la traduzione 1:1 del file MySQL_Schema.sql.
+//  Ogni campo, indice e relazione corrisponde esattamente alla DDL SQL.
+//  L'unica differenza rispetto a un datasource PostgreSQL è la riga
+//  provider = "mysql" — tutto il resto dell'API Prisma rimane identico.
+// ═══════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ──────────────────────────────────────────────────────────
+// Corrispondono ai tipi ENUM definiti in MySQL_Schema.sql
+
+enum Ruolo {
+  admin
+  operatore
+}
+
+enum Piano {
+  base
+  premium
+}
+
+enum TipoMovimento {
+  carico
+  scarico
+}
+
+enum FonteMovimento {
+  manuale
+  riordino_confermato
+  import_csv
+}
+
+enum UnitaMisura {
+  pz
+  kg
+  lt
+  conf
+  g
+  ml
+  m
+  altro
+}
+
+enum StatoRiordine {
+  suggerito
+  confermato
+  annullato
+  ricevuto
+}
+
+// ─── UTENTI ─────────────────────────────────────────────────────────
+// Tabella: utenti
+// Gestisce autenticazione (JWT), ruoli (admin/operatore) e piano (base/premium).
+// Un utente possiede prodotti, movimenti, riordini e refresh token.
+
+model Utente {
+  id             Int       @id @default(autoincrement()) @db.UnsignedInt
+  uuid           String    @unique @default(uuid()) @db.Char(36)
+  nome           String    @db.VarChar(100)
+  email          String    @unique @db.VarChar(255)
+  passwordHash   String    @db.Text        @map("password_hash")
+  ruolo          Ruolo     @default(operatore)
+  piano          Piano     @default(base)
+  pianoScadenza  DateTime? @db.Date        @map("piano_scadenza")
+  nomeNegozio    String?   @db.VarChar(200) @map("nome_negozio")
+  attivo         Boolean   @default(true)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt      @map("updated_at")
+
+  // Relazioni 1→N
+  refreshTokens  RefreshToken[]
+  prodotti       Prodotto[]     @relation("ProdottoCreatoDA")
+  movimenti      Movimento[]
+  riordini       RiordineLog[]
+  sogliAlert     SogliaAlert[]
+  fornitori      Fornitore[]
+
+  @@map("utenti")
+}
+
+// ─── REFRESH TOKENS ─────────────────────────────────────────────────
+// Tabella: refresh_tokens
+// Rotation pattern JWT: ogni refresh genera un nuovo token e revoca il vecchio.
+// Vedi backend/src/services/token.service.js per l'implementazione.
+
+model RefreshToken {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  utenteId   Int      @db.UnsignedInt               @map("utente_id")
+  tokenHash  String   @unique @db.VarChar(255)      @map("token_hash")
+  scadeIl    DateTime                                @map("scade_il")
+  revocato   Boolean  @default(false)
+  ipAddress  String?  @db.VarChar(45)               @map("ip_address")
+  userAgent  String?  @db.Text                      @map("user_agent")
+  createdAt  DateTime @default(now())               @map("created_at")
+
+  // Relazioni
+  utente     Utente   @relation(fields: [utenteId], references: [id], onDelete: Cascade)
+
+  @@index([utenteId], name: "idx_rt_utente")
+  @@map("refresh_tokens")
+}
+
+// ─── CATEGORIE ──────────────────────────────────────────────────────
+// Tabella: categorie
+// Seed iniziale: Alimentari, Bevande, Pulizia, Elettronica, Altro.
+// Ogni colore è un hex string #RRGGBB per la UI.
+
+model Categoria {
+  id        Int       @id @default(autoincrement()) @db.UnsignedInt
+  nome      String    @unique @db.VarChar(100)
+  colore    String    @default("#64748B") @db.Char(7)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relazioni
+  prodotti  Prodotto[]
+
+  @@map("categorie")
+}
+
+// ─── FORNITORI ──────────────────────────────────────────────────────
+// Tabella: fornitori
+// Il campo leadTimeGg (giorni di consegna) è usato dall'algoritmo riordino §3.3 BP.
+// Piano Premium: i fornitori sono visibili e modificabili dall'admin.
+
+model Fornitore {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  nome         String    @db.VarChar(200)
+  settore      String?   @db.VarChar(100)
+  email        String?   @db.VarChar(255)
+  telefono     String?   @db.VarChar(30)
+  indirizzo    String?   @db.Text
+  leadTimeGg   Int       @default(3) @db.UnsignedTinyInt @map("lead_time_gg")
+  note         String?   @db.Text
+  attivo       Boolean   @default(true)
+  creatoDaId   Int?      @db.UnsignedInt @map("creato_da")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt      @map("updated_at")
+
+  // Relazioni
+  creatoDa     Utente?   @relation(fields: [creatoDaId], references: [id], onDelete: SetNull)
+  prodotti     Prodotto[]
+  riordini     RiordineLog[]
+
+  @@index([attivo], name: "idx_forn_attivo")
+  @@map("fornitori")
+}
+
+// ─── PRODOTTI ───────────────────────────────────────────────────────
+// Tabella: prodotti
+// Entità centrale di SimpleStock.
+//
+// CAMPI CHIAVE PER IL BUSINESS PLAN:
+//   - qtyAttuale    : aggiornata da trigger after INSERT su movimenti
+//   - sogliaMinima  : genera alert automatico (MUST §2.4 BP)
+//   - consumoMedio  : media mobile ponderata — aggiornata ad ogni scarico
+//                     formula: ROUND(vecchio * 0.8 + qty_scaricata * 0.2, 3)
+//   - leadTimeGg    : override per-prodotto del lead time fornitore
+//                     (il fornitore ha il default, il prodotto può sovrascrivere)
+//
+// MOTORE RIORDINO (§3.3 BP, §2.5 BP):
+//   - autonomia_gg  = qtyAttuale / consumoMedio
+//   - trigger       = leadTimeGg + 2 (buffer sicurezza)
+//   - needsOrder    = autonomia_gg <= trigger
+//   - qtySuggerita  = consumoMedio * (leadTimeGg + copertura_target)
+
+model Prodotto {
+  id              Int         @id @default(autoincrement()) @db.UnsignedInt
+  sku             String      @db.VarChar(50)
+  nome            String      @db.VarChar(200)
+  descrizione     String?     @db.Text
+  unitaMisura     UnitaMisura @default(pz)                 @map("unita_misura")
+  qtyAttuale      Decimal     @default(0) @db.Decimal(12, 3) @map("qty_attuale")
+  sogliaMinima    Decimal     @default(0) @db.Decimal(12, 3) @map("soglia_minima")
+  leadTimeGg      Int         @default(3) @db.UnsignedTinyInt @map("lead_time_gg")
+  consumoMedio    Decimal     @default(1) @db.Decimal(10, 3) @map("consumo_medio")
+  prezzoAcquisto  Decimal?    @db.Decimal(10, 2)            @map("prezzo_acquisto")
+  note            String?     @db.Text
+  attivo          Boolean     @default(true)
+  createdAt       DateTime    @default(now())               @map("created_at")
+  updatedAt       DateTime    @updatedAt                    @map("updated_at")
+
+  // FK: Categoria (nullable — SET NULL on delete)
+  categoriaId     Int?        @db.UnsignedInt               @map("categoria_id")
+  categoria       Categoria?  @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
+
+  // FK: Fornitore (nullable — SET NULL on delete)
+  fornitoreId     Int?        @db.UnsignedInt               @map("fornitore_id")
+  fornitore       Fornitore?  @relation(fields: [fornitoreId], references: [id], onDelete: SetNull)
+
+  // FK: Utente creatore (nullable — SET NULL on delete)
+  creatoDaId      Int?        @db.UnsignedInt               @map("creato_da")
+  creatoDa        Utente?     @relation("ProdottoCreatoDA", fields: [creatoDaId], references: [id], onDelete: SetNull)
+
+  // Relazioni 1→N
+  movimenti       Movimento[]
+  riordini        RiordineLog[]
+  sogliAlert      SogliaAlert[]
+
+  // Constraint: (sku, creato_da) univoco — lo stesso utente non può avere due SKU uguali
+  @@unique([sku, creatoDaId], name: "uq_prod_sku_utente")
+  @@index([categoriaId],  name: "idx_prod_categoria")
+  @@index([fornitoreId],  name: "idx_prod_fornitore")
+  @@index([attivo],       name: "idx_prod_attivo")
+  @@map("prodotti")
+}
+
+// ─── MOVIMENTI ──────────────────────────────────────────────────────
+// Tabella: movimenti
+// Log immutabile di ogni operazione di carico/scarico.
+// I campi qtyPrima e qtyDopo sono snapshot al momento dell'operazione:
+// rendono ogni riga autoesplicativa e permettono audit trail completo.
+//
+// CONSTRAINT BUSINESS LOGIC (gestita nel service, non nel DB):
+//   - tipo=scarico AND quantita > prodotto.qtyAttuale → errore 400
+//
+// AGGIORNAMENTO consumoMedio (solo su scarico):
+//   nuovoConsumo = ROUND(vecchio * 0.8 + quantita * 0.2, 3)
+//   → implementato in movimenti.routes.js con $transaction Prisma
+
+model Movimento {
+  id          Int            @id @default(autoincrement()) @db.UnsignedInt
+  tipo        TipoMovimento
+  quantita    Decimal        @db.Decimal(12, 3)
+  qtyPrima    Decimal        @db.Decimal(12, 3) @map("qty_prima")
+  qtyDopo     Decimal        @db.Decimal(12, 3) @map("qty_dopo")
+  note        String?        @db.VarChar(500)
+  fonte       FonteMovimento @default(manuale)
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  // FK: Prodotto — CASCADE delete (se il prodotto è eliminato, i movimenti spariscono)
+  prodottoId  Int            @db.UnsignedInt @map("prodotto_id")
+  prodotto    Prodotto       @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+
+  // FK: Utente — RESTRICT delete (non puoi eliminare un utente con movimenti)
+  utenteId    Int            @db.UnsignedInt @map("utente_id")
+  utente      Utente         @relation(fields: [utenteId], references: [id], onDelete: Restrict)
+
+  // Indice composito per query storiche per prodotto (ultimi 30 gg)
+  @@index([prodottoId, createdAt(sort: Desc)], name: "idx_mov_prod_date")
+  @@index([utenteId],                          name: "idx_mov_utente")
+  @@index([tipo],                              name: "idx_mov_tipo")
+  @@index([createdAt(sort: Desc)],             name: "idx_mov_created")
+  @@map("movimenti")
+}
+
+// ─── SOGLIE_ALERT ───────────────────────────────────────────────────
+// Tabella: soglie_alert
+// Piano Premium: ogni utente può personalizzare la soglia di alert per prodotto.
+// Piano Base: usa il campo sogliaMinima di Prodotto (non personalizzabile).
+
+model SogliaAlert {
+  id            Int      @id @default(autoincrement()) @db.UnsignedInt
+  sogliaCustom  Decimal  @db.Decimal(12, 3) @map("soglia_custom")
+  notificaEmail Boolean  @default(true)     @map("notifica_email")
+  notificaPush  Boolean  @default(false)    @map("notifica_push")
+  attiva        Boolean  @default(true)
+  createdAt     DateTime @default(now())    @map("created_at")
+
+  // FK
+  prodottoId    Int      @db.UnsignedInt @map("prodotto_id")
+  prodotto      Prodotto @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+
+  utenteId      Int      @db.UnsignedInt @map("utente_id")
+  utente        Utente   @relation(fields: [utenteId], references: [id], onDelete: Cascade)
+
+  @@unique([prodottoId, utenteId], name: "uq_soglia")
+  @@map("soglie_alert")
+}
+
+// ─── RIORDINI_LOG ───────────────────────────────────────────────────
+// Tabella: riordini_log
+// Storico di ogni suggerimento/ordine generato dal motore decisionale (§3.3 BP).
+// I campi autonomiaGg, leadTimeGg, consumoMedioAlMomento sono snapshot
+// del calcolo al momento della creazione — utile per audit e analisi trend.
+
+model RiordineLog {
+  id                       Int           @id @default(autoincrement()) @db.UnsignedInt
+  qtySuggerita             Decimal       @db.Decimal(12, 3) @map("qty_suggerita")
+  qtyOrdinata              Decimal       @db.Decimal(12, 3) @map("qty_ordinata")
+  consumoMedioAlMomento    Decimal?      @db.Decimal(10, 3) @map("consumo_medio_al_momento")
+  autonomiaGg              Decimal?      @db.Decimal(8, 2)  @map("autonomia_gg")
+  leadTimeGg               Int?          @db.TinyInt        @map("lead_time_gg")
+  coperturTargetGg         Int           @default(14) @db.TinyInt @map("copertura_target_gg")
+  stato                    StatoRiordine @default(confermato)
+  note                     String?       @db.Text
+  createdAt                DateTime      @default(now())    @map("created_at")
+  updatedAt                DateTime      @updatedAt         @map("updated_at")
+
+  // FK
+  prodottoId    Int        @db.UnsignedInt  @map("prodotto_id")
+  prodotto      Prodotto   @relation(fields: [prodottoId], references: [id], onDelete: Cascade)
+
+  utenteId      Int        @db.UnsignedInt  @map("utente_id")
+  utente        Utente     @relation(fields: [utenteId], references: [id], onDelete: Restrict)
+
+  fornitoreId   Int?       @db.UnsignedInt  @map("fornitore_id")
+  fornitore     Fornitore? @relation(fields: [fornitoreId], references: [id], onDelete: SetNull)
+
+  @@index([prodottoId], name: "idx_riord_prodotto")
+  @@index([stato],      name: "idx_riord_stato")
+  @@index([utenteId],   name: "idx_riord_utente")
+  @@map("riordini_log")
+}
