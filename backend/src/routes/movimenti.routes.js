@@ -135,7 +135,7 @@ router.post('/', async (req, res) => {
 
 router.get('/', async (req, res) => {
   try {
-    const { ownerId, ownerPlan } = await resolveInventoryOwner(req.user);
+    const { ownerId } = await resolveInventoryOwner(req.user);
     const { prodottoId, tipo, da, a, limit = '50', offset = '0' } = req.query;
 
     const where = {};
@@ -147,7 +147,7 @@ router.get('/', async (req, res) => {
     if (tipo)       where.tipo = tipo;
 
     // Piano Base: storico limitato agli ultimi 30 giorni
-    const isBase = ownerPlan === 'base';
+    const isBase = req.user.piano === 'base';
     if (isBase) {
       const trentaGgFa = new Date();
       trentaGgFa.setDate(trentaGgFa.getDate() - 30);

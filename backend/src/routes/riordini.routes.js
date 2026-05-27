@@ -120,13 +120,7 @@ router.post('/:prodottoId/conferma', requireRole('admin'), requirePlan('premium'
       const qtyPrima      = Number(prodotto.qtyAttuale);
       const qtyDopo       = qtyPrima + qtyOrdinata;
 
-      // Aggiorna qty prodotto
-      await tx.prodotto.update({
-        where: { id: prodottoId },
-        data:  { qtyAttuale: qtyDopo },
-      });
-
-      // Registra movimento carico
+      // Registra movimento carico: il trigger MySQL aggiorna qty_attuale.
       await tx.movimento.create({
         data: {
           prodottoId,

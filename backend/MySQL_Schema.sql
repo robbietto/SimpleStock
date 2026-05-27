@@ -16,12 +16,11 @@ USE simplestock;
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- 1. TABELLA UTENTI
--- Nota: Il valore UUID viene generato dal backend (Node.js/Prisma) per garantire
--- compatibilità anche con versioni di MySQL precedenti alla 8.0.13.
+-- MySQL 8 genera UUID reali lato database; Prisma mantiene la stessa regola lato ORM.
 -- ──────────────────────────────────────────────────────────────────────────────
 CREATE TABLE utenti (
     id              INT UNSIGNED    NOT NULL AUTO_INCREMENT,
-    uuid            CHAR(36)        NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    uuid            CHAR(36)        NOT NULL DEFAULT (UUID()),
     nome            VARCHAR(100)    NOT NULL,
     email           VARCHAR(255)    NOT NULL,
     password_hash   TEXT            NOT NULL,
@@ -34,12 +33,13 @@ CREATE TABLE utenti (
     updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    UNIQUE KEY uq_utenti_email (email)
+    UNIQUE KEY uq_utenti_email (email),
+    UNIQUE KEY uq_utenti_uuid (uuid)
 ) ENGINE=InnoDB;
 
 -- Inserimento Admin (Necessario per mantenere l'integrità referenziale dei prodotti)
-INSERT INTO utenti (id, uuid, nome, email, password_hash, ruolo, piano, nome_negozio) VALUES
-(1, 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', 'Marco Rossi', 'marco@negozio.it', 'PLACEHOLDER_SOSTITUITO_DA_SEED_JS', 'admin', 'premium', 'Alimentari Rossi — Via Roma 12');
+INSERT INTO utenti (id, nome, email, password_hash, ruolo, piano, nome_negozio) VALUES
+(1, 'Marco Rossi', 'marco@negozio.it', 'PLACEHOLDER_SOSTITUITO_DA_SEED_JS', 'admin', 'premium', 'Alimentari Rossi — Via Roma 12');
 
 -- ──────────────────────────────────────────────────────────────────────────────
 -- 2. REFRESH TOKENS
@@ -153,7 +153,7 @@ VALUES
     ('ALI-002', 'Olio extravergine', 1, 'lt',    4.000, 10.000, 5, 3.000, 2, 1),
     ('ALI-003', 'Passata pomodoro',   1, 'conf', 28.000, 12.000, 2, 4.000, 1, 1),
     ('PUL-001', 'Detersivo piatti',   3, 'pz',    7.000,  5.000, 3, 1.500, 4, 1),
-    ('BEV-001', 'Acqua minerale 6pk', 2, 'conf',  3.000,  8.000, 2, 4.000, 3, 1),
+    ('BEV-001', 'Acqua minerale 6pk', 2, 'conf', 10.000,  8.000, 2, 4.000, 3, 1),
     ('ALI-004', 'Zucchero semolato',  1, 'kg',   22.000,  8.000, 3, 2.000, 1, 1),
     ('ALI-005', 'Pasta spaghetti',    1, 'conf', 18.000, 10.000, 2, 3.000, 1, 1),
     ('BEV-002', 'Latte intero UHT',   2, 'lt',    9.000, 12.000, 1, 4.000, 3, 1);

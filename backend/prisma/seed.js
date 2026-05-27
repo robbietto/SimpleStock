@@ -100,17 +100,31 @@ async function main() {
     { sku: 'ALI-002', nome: 'Olio extravergine',  catId: catAlimentari.id, unit: 'lt',   qty: 4,  soglia: 10, lead: 5, consumo: 3,   fornId: fOlio.id  },
     { sku: 'ALI-003', nome: 'Passata pomodoro',   catId: catAlimentari.id, unit: 'conf', qty: 28, soglia: 12, lead: 2, consumo: 4,   fornId: fRossi.id },
     { sku: 'PUL-001', nome: 'Detersivo piatti',   catId: catPulizia.id,    unit: 'pz',   qty: 7,  soglia: 5,  lead: 3, consumo: 1.5, fornId: fClean.id },
-    { sku: 'BEV-001', nome: 'Acqua minerale 6pk', catId: catBevande.id,    unit: 'conf', qty: 3,  soglia: 8,  lead: 2, consumo: 4,   fornId: fAcqua.id },
+    { sku: 'BEV-001', nome: 'Acqua minerale 6pk', catId: catBevande.id,    unit: 'conf', qty: 10, soglia: 8,  lead: 2, consumo: 4,   fornId: fAcqua.id },
     { sku: 'ALI-004', nome: 'Zucchero semolato',  catId: catAlimentari.id, unit: 'kg',   qty: 22, soglia: 8,  lead: 3, consumo: 2,   fornId: fRossi.id },
     { sku: 'ALI-005', nome: 'Pasta spaghetti',    catId: catAlimentari.id, unit: 'conf', qty: 18, soglia: 10, lead: 2, consumo: 3,   fornId: fRossi.id },
     { sku: 'BEV-002', nome: 'Latte intero UHT',   catId: catBevande.id,    unit: 'lt',   qty: 9,  soglia: 12, lead: 1, consumo: 4,   fornId: fAcqua.id },
   ];
 
+  const movCount = await prisma.movimento.count();
+  const shouldResetSeedProducts = movCount === 0;
   const prodotti = [];
   for (const p of prodottiData) {
     const prod = await prisma.prodotto.upsert({
       where:  { uq_prod_sku_utente: { sku: p.sku, creatoDaId: marco.id } },
-      update: {},   // OK qui: i dati prodotto non cambiano tra run
+      update: shouldResetSeedProducts
+        ? {
+            nome:         p.nome,
+            unitaMisura:  p.unit,
+            qtyAttuale:   p.qty,
+            sogliaMinima: p.soglia,
+            leadTimeGg:   p.lead,
+            consumoMedio: p.consumo,
+            categoriaId:  p.catId,
+            fornitoreId:  p.fornId,
+            attivo:       true,
+          }
+        : {},
       create: {
         sku:          p.sku,
         nome:         p.nome,
@@ -130,7 +144,6 @@ async function main() {
 
   // ── 5. MOVIMENTI ────────────────────────────────────────────────────
   // Inserisce movimenti solo se la tabella è vuota — evita duplicati a ogni run.
-  const movCount = await prisma.movimento.count();
   if (movCount > 0) {
     console.log(`  ↷ Movimenti già presenti (${movCount}) — skip`);
   } else {

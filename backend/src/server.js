@@ -21,6 +21,18 @@
 
 require('dotenv').config();                        // carica .env prima di tutto
 
+const REQUIRED_ENV = ['DATABASE_URL', 'JWT_SECRET', 'JWT_REFRESH_SECRET'];
+const missingEnv = REQUIRED_ENV.filter((key) => {
+  const value = process.env[key];
+  return !value || value.trim() === '' || value.startsWith('REPLACE_WITH');
+});
+
+if (missingEnv.length > 0) {
+  console.error(`✗ Variabili ambiente obbligatorie mancanti o non valide: ${missingEnv.join(', ')}`);
+  console.error('  → Copia backend/.env.example in backend/.env e compila valori reali.');
+  process.exit(1);
+}
+
 const express  = require('express');
 const cors     = require('cors');
 const prisma   = require('./lib/prisma');
