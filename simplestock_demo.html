@@ -412,13 +412,13 @@ a { color:inherit; text-decoration:none; }
   padding:20px; position:relative; overflow:hidden;
 }
 .chart-bars { display:flex; align-items:flex-end; gap:6px; height:120px; }
-.chart-bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; }
+.chart-bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%; }
 .chart-bar {
   width:100%; border-radius:4px 4px 0 0; position:relative;
   transition:opacity .15s;
 }
 .chart-bar:hover { opacity:.85; }
-.chart-bar-label { font-size:10px; color:var(--gray-400); text-align:center; }
+.chart-bar-label { font-size:10px; color:var(--gray-400); text-align:center; line-height:1.2; word-break:break-word; white-space:normal; }
 .chart-y-line { position:absolute; left:0; right:0; border-top:1px dashed var(--gray-200); }
 
 /* ─── MOBILE PREVIEW FRAME ────────────────────────────────────── */
@@ -1359,27 +1359,59 @@ function renderAlerts() {
 // 12. RENDER STOCK CHART
 // ════════════════════════════════════════════════════════════════
 function renderStockChart() {
-  const top = _prodotti.slice(0, 8);
+  const toNum = v => {
+    if (typeof v === 'string') {
+      const normalized = v.replace(/\s+/g, '').replace(',', '.');
+      const n = Number(normalized);
+      return Number.isFinite(n) ? n : 0;
+    }
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const score = p => {
+    const s = p._stato_scorta;
+    const rank = s === 'esaurito' ? 3 : s === 'critico' ? 2 : s === 'attenzione' ? 1 : 0;
+    const qty = toNum(p.qtyAttuale);
+    const soglia = Math.max(toNum(p.sogliaMinima), 1);
+    const ratio = qty / soglia;
+    const deficit = Math.max(soglia - qty, 0);
+    return { rank, ratio, deficit, qty };
+  };
+  const ordered = [..._prodotti].sort((a, b) => {
+    const pa = score(a);
+    const pb = score(b);
+    if (pa.rank !== pb.rank) return pb.rank - pa.rank;
+    if (pa.ratio !== pb.ratio) return pa.ratio - pb.ratio;
+    if (pa.deficit !== pb.deficit) return pb.deficit - pa.deficit;
+    return pa.qty - pb.qty;
+  });
+  const top = ordered.slice(0, 8);
   if (!top.length) {
     document.getElementById('stock-chart').innerHTML = '<div class="empty">Nessun dato</div>';
     return;
   }
-  const max = Math.max(...top.map(p => Math.max(Number(p.qtyAttuale), Number(p.sogliaMinima)) * 1.1), 1);
+  const max = Math.max(...top.map(p => Math.max(toNum(p.qtyAttuale), toNum(p.sogliaMinima)) * 1.1), 1);
   const bars = top.map(p => {
     const s   = p._stato_scorta;
     const col = ['critico','esaurito'].includes(s) ? '#E24B4A' : s === 'attenzione' ? '#B45309' : 'var(--navy)';
-    const h   = Math.round((Number(p.qtyAttuale) / max) * 100);
-    const sh  = Math.round((Number(p.sogliaMinima) / max) * 100);
-    const nm  = p.nome.length > 10 ? p.nome.slice(0, 9) + '…' : p.nome;
+    const qty = toNum(p.qtyAttuale);
+    const soglia = toNum(p.sogliaMinima);
+    const h   = Math.round((qty / max) * 100);
+    const sh  = Math.round((soglia / max) * 100);
+    const nm  = p.nome;
     return `<div class="chart-bar-wrap">
-      <div style="display:flex;align-items:flex-end;gap:2px;height:100%;">
-        <div class="chart-bar" style="height:${h}%;background:${col};flex:1;" title="${p.nome}: ${p.qtyAttuale} ${p.unitaMisura}"></div>
-        <div class="chart-bar" style="height:${sh}%;background:#FECACA;flex:1;" title="Soglia: ${p.sogliaMinima}"></div>
+      <div style="display:flex;align-items:flex-end;gap:2px;flex:1;">
+        <div class="chart-bar" style="height:${h}%;background:${col};flex:1;" title="${p.nome}: ${qty} ${p.unitaMisura}"></div>
+        <div class="chart-bar" style="height:${sh}%;background:#FECACA;flex:1;" title="Soglia: ${soglia}"></div>
       </div>
       <div class="chart-bar-label">${nm}</div>
     </div>`;
   }).join('');
-  document.getElementById('stock-chart').innerHTML = `<div class="chart-bars">${bars}</div>`;
+  const lines = [25, 50, 75].map(pct =>
+    `<div class="chart-y-line" style="top:${100 - pct}%;"></div>`
+  ).join('');
+  document.getElementById('stock-chart').innerHTML =
+    `${lines}<div class="chart-bars" style="position:relative;z-index:1;">${bars}</div>`;
 }
 
 // ════════════════════════════════════════════════════════════════

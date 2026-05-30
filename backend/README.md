@@ -43,7 +43,7 @@ Apri `.env` e verifica/modifica:
 ```
 DATABASE_URL="mysql://root:root@localhost:3306/simplestock"
 # Se il tuo MySQL non ha password, usa: mysql://root:@localhost:3306/simplestock
-JWT_SECRET="genera-con-node-e-console-log-crypto-randomBytes-32-toString-hex"
+JWT_SECRET="genera-con-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))""
 JWT_REFRESH_SECRET="altra-stringa-diversa-32-char"
 ```
 
