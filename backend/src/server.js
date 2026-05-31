@@ -13,7 +13,7 @@
 //
 //  CORS:
 //    Origine consentita configurabile via env CORS_ORIGIN.
-//    In locale: http://localhost:5173 (Vite dev server)
+//    In locale: http://localhost:3000 (npx serve) oppure http://localhost:5500 (Live Server)
 //    In produzione: URL Vercel del frontend
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -53,9 +53,9 @@ const API  = '/api/v1';
 /**
  * CORS
  * Origini consentite: lista separata da virgola in CORS_ORIGIN env.
- * Esempio .env:  CORS_ORIGIN=http://localhost:5173,https://simplestock.vercel.app
+ * Esempio .env:  CORS_ORIGIN=http://localhost:3000,http://localhost:5500
  */
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5500')
   .split(',')
   .map(o => o.trim());
 
@@ -135,7 +135,7 @@ app.use((_req, res) => {
   res.status(404).json({
     error: 'Rotta non trovata',
     code:  'ROUTE_NOT_FOUND',
-    tip:   `Usa ${API}/<auth|prodotti|movimenti|riordini>`,
+    tip:   `Usa ${API}/<auth|prodotti|movimenti|riordini|fornitori>`,
   });
 });
 

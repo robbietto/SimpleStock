@@ -1,6 +1,11 @@
 # Dependencies
 node_modules/
 
+# Package manager caches
+.npm/
+.npx/
+.cache/
+
 # Build output
 dist/
 

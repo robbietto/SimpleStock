@@ -25,6 +25,13 @@ const auth     = require('../middleware/auth');
 
 const router = express.Router();
 
+function parseDurationMs(value, fallbackMs) {
+  const match = /^(\d+)\s*([smhd])$/i.exec(value || '');
+  if (!match) return fallbackMs;
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return Number(match[1]) * multipliers[match[2].toLowerCase()];
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 /** Genera un JWT access token (15 min) */
@@ -42,14 +49,14 @@ function signAccessToken(utente) {
 }
 
 /** Genera un refresh token opaco (random 64 byte) e ne salva l'hash SHA-256 */
-async function createRefreshToken(utenteId, ipAddress, userAgent) {
+async function createRefreshToken(utenteId, ipAddress, userAgent, db = prisma) {
   const rawToken  = crypto.randomBytes(64).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
 
-  const scadeIl = new Date();
-  scadeIl.setDate(scadeIl.getDate() + 7); // +7 giorni
+  const refreshTtlMs = parseDurationMs(process.env.REFRESH_EXPIRES_IN, 7 * 86400000);
+  const scadeIl = new Date(Date.now() + refreshTtlMs);
 
-  await prisma.refreshToken.create({
+  await db.refreshToken.create({
     data: {
       utenteId,
       tokenHash,
@@ -152,18 +159,27 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ error: 'Account disabilitato', code: 'ACCOUNT_DISABLED' });
     }
 
-    // ROTATION: revoca il vecchio, emetti nuovi token
-    await prisma.refreshToken.update({
-      where: { id: stored.id },
-      data:  { revocato: true },
+    // ROTATION atomica: una sola richiesta può consumare il token corrente.
+    const newRefresh = await prisma.$transaction(async (tx) => {
+      const revoked = await tx.refreshToken.updateMany({
+        where: { id: stored.id, revocato: false },
+        data:  { revocato: true },
+      });
+      if (revoked.count !== 1) return null;
+
+      return createRefreshToken(
+        stored.utente.id,
+        req.ip,
+        req.headers['user-agent'],
+        tx
+      );
     });
 
-    const newAccess  = signAccessToken(stored.utente);
-    const newRefresh = await createRefreshToken(
-      stored.utente.id,
-      req.ip,
-      req.headers['user-agent']
-    );
+    if (!newRefresh) {
+      return res.status(401).json({ error: 'Refresh token non valido o scaduto', code: 'INVALID_REFRESH' });
+    }
+
+    const newAccess = signAccessToken(stored.utente);
 
     return res.status(200).json({
       accessToken:  newAccess,

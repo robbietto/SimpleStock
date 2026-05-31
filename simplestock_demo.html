@@ -411,15 +411,28 @@ a { color:inherit; text-decoration:none; }
   border:1px solid var(--gray-200); border-radius:var(--radius);
   padding:20px; position:relative; overflow:hidden;
 }
-.chart-bars { display:flex; align-items:flex-end; gap:6px; height:120px; }
-.chart-bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%; }
+.chart-plot { height:120px; position:relative; padding-left:34px; }
+.chart-bars { display:flex; align-items:stretch; gap:6px; height:100%; position:relative; z-index:1; }
+.chart-bar-wrap { flex:1; display:flex; align-items:flex-end; gap:2px; height:100%; min-width:0; }
 .chart-bar {
-  width:100%; border-radius:4px 4px 0 0; position:relative;
+  flex:1; min-width:0; border-radius:4px 4px 0 0; position:relative;
   transition:opacity .15s;
 }
 .chart-bar:hover { opacity:.85; }
-.chart-bar-label { font-size:10px; color:var(--gray-400); text-align:center; line-height:1.2; word-break:break-word; white-space:normal; }
-.chart-y-line { position:absolute; left:0; right:0; border-top:1px dashed var(--gray-200); }
+.chart-labels { display:flex; gap:6px; margin:6px 0 0 34px; }
+.chart-bar-label {
+  flex:1; min-width:0; height:24px; overflow:hidden;
+  font-size:10px; color:var(--gray-400); text-align:center; line-height:1.2;
+  word-break:break-word; white-space:normal;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+}
+.chart-y-line { position:absolute; left:34px; right:0; border-top:1px dashed var(--gray-200); }
+.chart-y-line-base { border-top-color:var(--gray-300); }
+.chart-y-label {
+  position:absolute; right:calc(100% + 6px); width:28px;
+  transform:translateY(-50%); text-align:right;
+  font-size:10px; line-height:1; color:var(--gray-500);
+}
 
 /* ─── MOBILE PREVIEW FRAME ────────────────────────────────────── */
 .mobile-preview-section {
@@ -771,12 +784,7 @@ a { color:inherit; text-decoration:none; }
         <div class="card" style="padding:0;overflow:hidden;">
           <table class="data-table">
             <thead><tr><th>Nome</th><th>Settore</th><th>Lead time (gg)</th><th>Prodotti associati</th><th>Contatto</th><th>Azioni</th></tr></thead>
-            <tbody>
-              <tr><td class="fw">Distribuzione Rossi</td><td>Alimentari</td><td><span class="badge badge-ok">3 gg</span></td><td>Farina, Zucchero, Pasta</td><td>rossi@dist.it</td><td><button class="btn btn-ghost btn-xs">Modifica</button></td></tr>
-              <tr><td class="fw">Oleificio Meridionale</td><td>Alimentari</td><td><span class="badge badge-warn">5 gg</span></td><td>Olio extravergine</td><td>info@olio.it</td><td><button class="btn btn-ghost btn-xs">Modifica</button></td></tr>
-              <tr><td class="fw">AcquaFonte Srl</td><td>Bevande</td><td><span class="badge badge-ok">2 gg</span></td><td>Acqua minerale</td><td>ordini@acquafonte.it</td><td><button class="btn btn-ghost btn-xs">Modifica</button></td></tr>
-              <tr><td class="fw">CleanPro Italia</td><td>Pulizia</td><td><span class="badge badge-ok">3 gg</span></td><td>Detersivo piatti</td><td>cleanpro@gmail.com</td><td><button class="btn btn-ghost btn-xs">Modifica</button></td></tr>
-            </tbody>
+            <tbody id="fornitori-tbody"></tbody>
           </table>
         </div>
       </div>
@@ -984,10 +992,6 @@ a { color:inherit; text-decoration:none; }
           <label>Fornitore principale</label>
           <select id="fp-fornitore">
             <option value="">— Nessuno —</option>
-            <option value="1">Distribuzione Rossi</option>
-            <option value="2">Oleificio Meridionale</option>
-            <option value="3">AcquaFonte Srl</option>
-            <option value="4">CleanPro Italia</option>
           </select>
         </div>
       </div>
@@ -1053,11 +1057,22 @@ const API_BASE = 'http://localhost:3001/api/v1';
 // ════════════════════════════════════════════════════════════════
 // 1. AUTH STATE — persistito in localStorage
 // ════════════════════════════════════════════════════════════════
-let _auth = {
-  accessToken:  localStorage.getItem('ss_access')  || null,
-  refreshToken: localStorage.getItem('ss_refresh') || null,
-  user:         JSON.parse(localStorage.getItem('ss_user') || 'null'),
-};
+function _readStoredAuth() {
+  try {
+    return {
+      accessToken:  localStorage.getItem('ss_access')  || null,
+      refreshToken: localStorage.getItem('ss_refresh') || null,
+      user:         JSON.parse(localStorage.getItem('ss_user') || 'null'),
+    };
+  } catch {
+    localStorage.removeItem('ss_access');
+    localStorage.removeItem('ss_refresh');
+    localStorage.removeItem('ss_user');
+    return { accessToken: null, refreshToken: null, user: null };
+  }
+}
+
+let _auth = _readStoredAuth();
 
 function _saveAuth(access, refresh, user) {
   _auth = { accessToken: access, refreshToken: refresh, user };
@@ -1090,6 +1105,37 @@ function _formatApiError(payload, fallback) {
   return fallback;
 }
 
+let _refreshAuthPromise = null;
+
+async function _refreshAuth() {
+  if (!_auth.refreshToken) {
+    throw new Error('Sessione scaduta — effettua di nuovo il login');
+  }
+
+  if (!_refreshAuthPromise) {
+    const refreshToken = _auth.refreshToken;
+    _refreshAuthPromise = (async () => {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        _clearAuth();
+        _showLoginScreen();
+        throw new Error('Sessione scaduta — effettua di nuovo il login');
+      }
+      const data = await res.json();
+      _saveAuth(data.accessToken, data.refreshToken, data.user);
+      return data.accessToken;
+    })().finally(() => {
+      _refreshAuthPromise = null;
+    });
+  }
+
+  return _refreshAuthPromise;
+}
+
 // ════════════════════════════════════════════════════════════════
 // 2. HTTP CLIENT — fetch + auto-refresh JWT
 // ════════════════════════════════════════════════════════════════
@@ -1100,30 +1146,24 @@ async function _req(path, opts = {}) {
     ...opts.headers,
   });
 
-  let res = await fetch(`${API_BASE}${path}`, { ...opts, headers: buildHeaders(_auth.accessToken) });
+  const isSessionEndpoint = ['/auth/login', '/auth/refresh', '/auth/logout'].includes(path);
+  let res = await fetch(`${API_BASE}${path}`, { ...opts, headers: buildHeaders(isSessionEndpoint ? null : _auth.accessToken) });
 
   // 401 → prova a rinnovare il token
-  if (res.status === 401 && _auth.refreshToken) {
-    const rRes = await fetch(`${API_BASE}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: _auth.refreshToken }),
-    });
-    if (rRes.ok) {
-      const d = await rRes.json();
-      _saveAuth(d.accessToken, d.refreshToken, d.user);
-      res = await fetch(`${API_BASE}${path}`, { ...opts, headers: buildHeaders(d.accessToken) });
-    } else {
-      _clearAuth();
-      _showLoginScreen();
-      throw new Error('Sessione scaduta — effettua di nuovo il login');
-    }
+  const canRefresh = !isSessionEndpoint;
+  if (res.status === 401 && _auth.refreshToken && canRefresh) {
+    const accessToken = await _refreshAuth();
+    res = await fetch(`${API_BASE}${path}`, { ...opts, headers: buildHeaders(accessToken) });
   }
 
   if (!res.ok) {
     let msg = `Errore ${res.status}`;
-    try { const e = await res.json(); msg = _formatApiError(e, msg); } catch {}
-    throw new Error(msg);
+    let payload = null;
+    try { payload = await res.json(); msg = _formatApiError(payload, msg); } catch {}
+    const err = new Error(msg);
+    err.status = res.status;
+    err.code = payload?.code;
+    throw err;
   }
 
   return res.json();
@@ -1140,6 +1180,7 @@ const http = {
 // 3. STATO APPLICAZIONE
 // ════════════════════════════════════════════════════════════════
 let _prodotti  = [];   // cache prodotti arricchiti dall'API
+let _fornitori = [];   // cache fornitori reali dall'API
 let _movTipo   = 'in';
 let _qmTipo    = 'in';
 let _editId    = null; // id prodotto in modifica
@@ -1168,8 +1209,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // ════════════════════════════════════════════════════════════════
 // 5. SCHERMO LOADING (barra superiore)
 // ════════════════════════════════════════════════════════════════
+let _loadingRequests = 0;
+
 function _setLoading(on) {
-  document.getElementById('loading-bar').classList.toggle('active', on);
+  _loadingRequests = Math.max(0, _loadingRequests + (on ? 1 : -1));
+  document.getElementById('loading-bar').classList.toggle('active', _loadingRequests > 0);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1263,6 +1307,7 @@ function goto(name) {
   if (name === 'movimenti') { populateMovSelect(); renderMovimenti(); }
   if (name === 'riordini')  renderRiordini();
   if (name === 'prodotti')  renderProdotti();
+  if (name === 'fornitori') refreshFornitori();
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1283,6 +1328,12 @@ async function _fetchRiordini() {
   return http.get(`/riordini/suggerimenti?copertura=${_copertura}`);
 }
 
+async function _fetchFornitori() {
+  const data = await http.get('/fornitori');
+  _fornitori = data.fornitori || [];
+  return data;
+}
+
 // ════════════════════════════════════════════════════════════════
 // 9. RENDER ALL — entry point principale
 // ════════════════════════════════════════════════════════════════
@@ -1296,6 +1347,7 @@ async function renderAll() {
     await renderRecentMov();
     renderProdotti();
     updateBadge(data.kpi?.daRiordinare || 0);
+    await refreshFornitori();
   } catch (err) {
     toast('Errore caricamento: ' + err.message, 'error');
   } finally {
@@ -1335,19 +1387,33 @@ function renderKPI(kpi) {
 // 11. RENDER ALERTS
 // ════════════════════════════════════════════════════════════════
 function renderAlerts() {
-  const danger  = _prodotti.filter(p => ['critico','esaurito'].includes(p._stato_scorta));
-  const warn    = _prodotti.filter(p => p._stato_scorta === 'attenzione');
+  const rank = { esaurito: 3, critico: 2, attenzione: 1, ok: 0 };
+  const alerts = _prodotti
+    .filter(p => p._da_riordinare || p._stato_scorta !== 'ok')
+    .sort((a, b) => {
+      if (a._da_riordinare !== b._da_riordinare) return a._da_riordinare ? -1 : 1;
+      if (rank[a._stato_scorta] !== rank[b._stato_scorta]) {
+        return rank[b._stato_scorta] - rank[a._stato_scorta];
+      }
+      const autonomiaA = Number.isFinite(Number(a._autonomia_gg)) ? Number(a._autonomia_gg) : Infinity;
+      const autonomiaB = Number.isFinite(Number(b._autonomia_gg)) ? Number(b._autonomia_gg) : Infinity;
+      return autonomiaA - autonomiaB;
+    });
   let html = '';
-  [...danger, ...warn].slice(0, 6).forEach(p => {
+  alerts.slice(0, 6).forEach(p => {
     const isCrit = ['critico','esaurito'].includes(p._stato_scorta);
+    const needsOrder = Boolean(p._da_riordinare);
+    const autonomia = Number(p._autonomia_gg);
+    const autonomiaText = Number.isFinite(autonomia) ? `${autonomia} gg autonomia` : 'autonomia non disponibile';
     html += `<div class="alert-item ${isCrit ? 'alert-critical' : 'alert-warning'}">
       <div class="alert-dot"></div>
       <div class="alert-text">
         <strong>${p.nome}</strong>
         <small>${Number(p.qtyAttuale)} ${p.unitaMisura} disponibili · soglia: ${Number(p.sogliaMinima)} ${p.unitaMisura}</small>
+        ${needsOrder ? `<small><strong>Riordino suggerito: ${Number(p._qty_suggerita)} ${p.unitaMisura}</strong> · ${autonomiaText}</small>` : ''}
       </div>
       <div class="alert-actions">
-        <button class="btn btn-primary btn-xs" onclick="goto('riordini')">Riordina</button>
+        <button class="btn btn-primary btn-xs" onclick="goto('riordini')">${needsOrder ? 'Riordina' : 'Dettagli'}</button>
       </div>
     </div>`;
   });
@@ -1390,7 +1456,13 @@ function renderStockChart() {
     document.getElementById('stock-chart').innerHTML = '<div class="empty">Nessun dato</div>';
     return;
   }
-  const max = Math.max(...top.map(p => Math.max(toNum(p.qtyAttuale), toNum(p.sogliaMinima)) * 1.1), 1);
+  const rawMax = Math.max(...top.map(p => Math.max(toNum(p.qtyAttuale), toNum(p.sogliaMinima))), 1);
+  const roughStep = (rawMax * 1.05) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalizedStep = roughStep / magnitude;
+  const niceFactor = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 10].find(factor => factor >= normalizedStep) || 10;
+  const axisStep = niceFactor * magnitude;
+  const max = axisStep * 4;
   const bars = top.map(p => {
     const s   = p._stato_scorta;
     const col = ['critico','esaurito'].includes(s) ? '#E24B4A' : s === 'attenzione' ? '#B45309' : 'var(--navy)';
@@ -1398,20 +1470,23 @@ function renderStockChart() {
     const soglia = toNum(p.sogliaMinima);
     const h   = Math.round((qty / max) * 100);
     const sh  = Math.round((soglia / max) * 100);
-    const nm  = p.nome;
     return `<div class="chart-bar-wrap">
-      <div style="display:flex;align-items:flex-end;gap:2px;flex:1;">
-        <div class="chart-bar" style="height:${h}%;background:${col};flex:1;" title="${p.nome}: ${qty} ${p.unitaMisura}"></div>
-        <div class="chart-bar" style="height:${sh}%;background:#FECACA;flex:1;" title="Soglia: ${soglia}"></div>
-      </div>
-      <div class="chart-bar-label">${nm}</div>
+      <div class="chart-bar" style="height:${h}%;background:${col};" title="${p.nome}: ${qty} ${p.unitaMisura}"></div>
+      <div class="chart-bar" style="height:${sh}%;background:#FECACA;" title="Soglia: ${soglia}"></div>
     </div>`;
   }).join('');
-  const lines = [25, 50, 75].map(pct =>
-    `<div class="chart-y-line" style="top:${100 - pct}%;"></div>`
+  const labels = top.map(p =>
+    `<div class="chart-bar-label" title="${p.nome}">${p.nome}</div>`
+  ).join('');
+  const formatAxisValue = value => value.toLocaleString('it-IT', { maximumFractionDigits: 2 });
+  const lines = [0, 25, 50, 75, 100].map((pct, index) =>
+    `<div class="chart-y-line${pct === 0 ? ' chart-y-line-base' : ''}" style="bottom:${pct}%;">
+      <span class="chart-y-label">${formatAxisValue(axisStep * index)}</span>
+    </div>`
   ).join('');
   document.getElementById('stock-chart').innerHTML =
-    `${lines}<div class="chart-bars" style="position:relative;z-index:1;">${bars}</div>`;
+    `<div class="chart-plot">${lines}<div class="chart-bars">${bars}</div></div>
+     <div class="chart-labels">${labels}</div>`;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1509,7 +1584,50 @@ function liveSearch(v) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 15. RENDER STORICO MOVIMENTI (schermata movimenti)
+// 15. RENDER FORNITORI — anagrafica reale via API
+// ════════════════════════════════════════════════════════════════
+function populateFornitoreSelect() {
+  const select = document.getElementById('fp-fornitore');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">— Nessuno —</option>' +
+    _fornitori.map(f => `<option value="${f.id}">${f.nome}</option>`).join('');
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function renderFornitori(errorMessage = '') {
+  const tbody = document.getElementById('fornitori-tbody');
+  if (!tbody) return;
+  if (errorMessage) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty">Errore: ${errorMessage}</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = _fornitori.length ? _fornitori.map(f => {
+    const leadCls = Number(f.leadTimeGg) > 4 ? 'badge-warn' : 'badge-ok';
+    const contact = f.email || f.telefono || '—';
+    return `<tr>
+      <td class="fw">${f.nome}</td>
+      <td>${f.settore || '—'}</td>
+      <td><span class="badge ${leadCls}">${f.leadTimeGg} gg</span></td>
+      <td>${f.prodottiAssociati || 0}</td>
+      <td>${contact}</td>
+      <td><button class="btn btn-ghost btn-xs" onclick="toast('Modifica fornitore disponibile nella prossima iterazione','info')">Modifica</button></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6"><div class="empty">Nessun fornitore disponibile</div></td></tr>';
+}
+
+async function refreshFornitori() {
+  try {
+    await _fetchFornitori();
+    populateFornitoreSelect();
+    renderFornitori();
+  } catch (err) {
+    renderFornitori(err.message);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 16. RENDER STORICO MOVIMENTI (schermata movimenti)
 // ════════════════════════════════════════════════════════════════
 async function renderMovimenti() {
   const ftVal  = document.getElementById('filter-tipo')?.value || '';
@@ -1675,7 +1793,7 @@ async function confirmRiordine(prodottoId, qtySuggerita, unit, nome) {
       coperturaDays: _copertura,
     });
     await renderAll();
-    renderRiordini();
+    await renderRiordini();
     toast(`Riordine confermato: +${qtySuggerita} ${unit} di "${nome}" caricati.`, 'success');
   } catch (err) {
     toast(err.message, 'error');
@@ -1864,10 +1982,14 @@ async function saveMovimento() {
     document.getElementById('mov-qty').value  = '1';
     document.getElementById('mov-note').value = '';
     await renderAll();
-    renderMovimenti();
+    await renderMovimenti();
     toast(`${_movTipo === 'in' ? 'Carico' : 'Scarico'} di ${qty} ${p.unitaMisura} su "${p.nome}" registrato.`, 'success');
   } catch (err) {
     toast(err.message, 'error');
+    if (err.code === 'INSUFFICIENT_STOCK') {
+      await renderAll();
+      await renderMovimenti();
+    }
   } finally {
     _setLoading(false);
   }
@@ -1897,9 +2019,18 @@ async function saveQuickMov() {
     });
     closeModal('modal-quick-mov');
     await renderAll();
+    if (document.getElementById('screen-movimenti').classList.contains('active')) {
+      await renderMovimenti();
+    }
     toast(`Movimento registrato su "${p.nome}".`, 'success');
   } catch (err) {
     toast(err.message, 'error');
+    if (err.code === 'INSUFFICIENT_STOCK') {
+      await renderAll();
+      if (document.getElementById('screen-movimenti').classList.contains('active')) {
+        await renderMovimenti();
+      }
+    }
   } finally {
     _setLoading(false);
   }

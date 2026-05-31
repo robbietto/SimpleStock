@@ -56,9 +56,25 @@ router.post('/', async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
 
       // 1. Leggi prodotto — lancia eccezione se non esiste
-      const prodotto = await tx.prodotto.findFirstOrThrow({
-        where: { id: prodottoId, attivo: true, creatoDaId: ownerId },
-      });
+      const [prodotto] = await tx.$queryRaw`
+        SELECT
+          id,
+          qty_attuale AS qtyAttuale,
+          consumo_medio AS consumoMedio,
+          unita_misura AS unitaMisura
+        FROM prodotti
+        WHERE id = ${prodottoId}
+          AND attivo = 1
+          AND creato_da = ${ownerId}
+        FOR UPDATE
+      `;
+
+      if (!prodotto) {
+        throw Object.assign(
+          new Error('Prodotto non trovato'),
+          { statusCode: 404, code: 'NOT_FOUND' }
+        );
+      }
 
       const qtyAttuale = Number(prodotto.qtyAttuale);
 
@@ -115,7 +131,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: err.message, code: err.code });
     }
     if (err.statusCode) {
-      return res.status(err.statusCode).json({ error: err.message });
+      return res.status(err.statusCode).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
     }
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'Prodotto non trovato', code: 'NOT_FOUND' });
